@@ -71,7 +71,7 @@ typedef int socket_t;
     #define SOCKET_EWOULDBLOCK EWOULDBLOCK
 #endif
 
-#include "easywsclient.hpp"
+#include "websocket-client.hpp"
 #include <functional>
 #include <string>
 #include <thread>

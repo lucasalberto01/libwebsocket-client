@@ -2,8 +2,8 @@
 
 CC = g++
 CFLAGS = -Wall -std=c++11
-TARGET = easywsclient.o
-SRC = easywsclient.cpp
+TARGET = websocket-client.o
+SRC = websocket-client.cpp
 LIBS = -lboost_system -lboost_thread -lpthread
 
 
