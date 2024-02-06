@@ -1,8 +1,7 @@
 
 #ifdef _WIN32
     #if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
-        #define _CRT_SECURE_NO_WARNINGS // _CRT_SECURE_NO_WARNINGS for sscanf errors in \
-            // MSVC2013 Express
+        #define _CRT_SECURE_NO_WARNINGS // _CRT_SECURE_NO_WARNINGS for sscanf errors in MSVC2013 Express
     #endif
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
@@ -126,16 +125,27 @@ WebSocket::WebSocket() {
     this->openCallback = NULL;
     this->messageCallback = NULL;
     this->closeCallback = NULL;
+    logger.SetTh(logger.VERBOSITY_NORMAL);
 }
 
 WebSocket::readyStateValues WebSocket::getReadyState() const {
     return this->readyState;
 }
 
-void WebSocket::begin() {
+void WebSocket::begin(bool unblocked) {
+
+    // check host exist
+    if (this->host.empty()) {
+        logger.show("Error: Host is empty", Verbose::VERBOSITY_NORMAL);
+        logger.show("Please set the host using setHost method\n", Verbose::VERBOSITY_NORMAL);
+        exit(1);
+        return;
+    }
+
+    // Start loop thread
     this->loopThread = std::thread(&WebSocket::loopThreadFunction, this);
 
-    if (this->loopThread.joinable()) {
+    if (unblocked && this->loopThread.joinable()) {
         this->loopThread.join();
     }
 }
@@ -218,6 +228,7 @@ void WebSocket::send(const std::string &message) {
 }
 
 void WebSocket::sendPing() {
+    logger.show("PING SEND!\n", Verbose::VERBOSITY_NORMAL);
     std::string empty;
     this->sendData(wsheader_type::PING, empty.size(), empty.begin(), empty.end());
 }
@@ -283,7 +294,7 @@ void WebSocket::dispatchBinary(std::function<void(const std::vector<uint8_t> &me
                 // if it were valid. So just close() and return immediately
                 // for now.
                 this->isRxBad = true;
-                fprintf(stderr, "ERROR: Frame has invalid frame length. Closing.\n");
+                logger.show("ERROR: Frame has invalid frame length. Closing.\n", Verbose::VERBOSITY_NORMAL);
                 this->close();
                 return;
             }
@@ -323,20 +334,21 @@ void WebSocket::dispatchBinary(std::function<void(const std::vector<uint8_t> &me
                 std::vector<uint8_t>().swap(this->receivedData); // free memory
             }
         } else if (ws.opcode == wsheader_type::PING) {
+            logger.show("PING!\n", Verbose::VERBOSITY_NORMAL);
             if (ws.mask) {
                 for (size_t i = 0; i != ws.N; ++i) {
                     this->rxbuf[i + ws.header_size] ^= ws.masking_key[i & 0x3];
                 }
             }
             std::string data(this->rxbuf.begin() + ws.header_size, this->rxbuf.begin() + ws.header_size + (size_t)ws.N);
-            this->sendData(wsheader_type::PONG, data.size(), data.begin(), data.end());
+            this->sendData(wsheader_type::PING, data.size(), data.begin(), data.end());
 
         } else if (ws.opcode == wsheader_type::PONG) {
-            fprintf(stderr, "PONG!\n");
+            logger.show("PONG!\n", Verbose::VERBOSITY_NORMAL);
         } else if (ws.opcode == wsheader_type::CLOSE) {
             close();
         } else {
-            fprintf(stderr, "ERROR: Got unexpected WebSocket message.\n");
+            logger.show("ERROR: Got unexpected WebSocket message.\n", Verbose::VERBOSITY_NORMAL);
             close();
         }
 
@@ -359,17 +371,16 @@ void WebSocket::loopThreadFunction() {
             this->poll();
 
             this->dispatchBinary([this](const std::vector<uint8_t> &message) {
-                fprintf(stderr, "Received message of length %lu\n", message.size());
+                logger.show("Received message of length " + std::to_string(message.size()) + "\n", Verbose::VERBOSITY_NORMAL);
                 if (this->messageCallback) {
                     this->messageCallback(message);
                 }
             });
 
         } else if (state == WebSocket::CLOSING) {
-            fprintf(stderr, "WebSocket is closing...\n");
+            logger.show("WebSocket is closing...\n", Verbose::VERBOSITY_NORMAL);
         } else if (state == WebSocket::CLOSED) {
-            fprintf(stderr, "WebSocket is closed! Retry\n");
-
+            logger.show("WebSocket is closed! Retry\n", Verbose::VERBOSITY_NORMAL);
             std::this_thread::sleep_for(std::chrono::seconds(5));
             // Change state to connecting
             this->readyState = WebSocket::CONNECTING;
@@ -414,7 +425,7 @@ void WebSocket::poll(int timeout) { // timeout in milliseconds
         } else if (ret <= 0) {
             this->rxbuf.resize(N);
             this->terminateConnection();
-            GLOBAL fputs(ret < 0 ? "Connection error!\n" : "Connection closed!\n", stderr);
+            logger.show("ERROR:" + std::string(ret < 0 ? "Connection error!" : "Connection closed!") + "\n", Verbose::VERBOSITY_NORMAL);
             break;
         } else {
             this->rxbuf.resize(N + ret);
@@ -422,14 +433,15 @@ void WebSocket::poll(int timeout) { // timeout in milliseconds
     }
 
     while (this->txbuf.size()) {
-        int ret = GLOBAL send(this->sockfd, (char *)&this->txbuf[0], this->txbuf.size(), 0);
+        int ret = ::send(this->sockfd, (char *)&this->txbuf[0], this->txbuf.size(), 0);
 
         if (false) {
         } else if (ret < 0 && (socketerrno == SOCKET_EWOULDBLOCK || socketerrno == SOCKET_EAGAIN_EINPROGRESS)) {
             break;
         } else if (ret <= 0) {
             this->terminateConnection();
-            GLOBAL fputs(ret < 0 ? "Connection error!\n" : "Connection closed!\n", stderr);
+            logger.show("ERROR:" + std::string(ret < 0 ? "Connection error!" : "Connection closed!") + "\n", Verbose::VERBOSITY_NORMAL);
+            logger.show("ret: " + std::to_string(ret) + "\n", Verbose::VERBOSITY_NORMAL);
             break;
         } else {
             this->txbuf.erase(this->txbuf.begin(), this->txbuf.begin() + ret);
@@ -437,6 +449,8 @@ void WebSocket::poll(int timeout) { // timeout in milliseconds
     }
 
     if (!this->txbuf.size() && this->readyState == CLOSING) {
+        logger.show("Closing connection\n", Verbose::VERBOSITY_NORMAL);
+        logger.show("txbuf.size() == 0\n", Verbose::VERBOSITY_NORMAL);
         this->terminateConnection();
     }
 }
@@ -499,13 +513,13 @@ int WebSocket::from_url(const std::string &url, bool useMask, const std::string 
     char path[512];
 
     if (url.size() >= 512) {
-        fprintf(stderr, "ERROR: url size limit exceeded: %s\n", url.c_str());
+        logger.show("ERROR: url size limit exceeded: " + url + "\n", Verbose::VERBOSITY_NORMAL);
         exit(1);
         return -1;
     }
 
     if (origin.size() >= 200) {
-        fprintf(stderr, "ERROR: origin size limit exceeded: %s\n", origin.c_str());
+        logger.show("ERROR: origin size limit exceeded: " + origin + "\n", Verbose::VERBOSITY_NORMAL);
         exit(1);
         return -1;
     }
@@ -520,7 +534,7 @@ int WebSocket::from_url(const std::string &url, bool useMask, const std::string 
         port = 80;
         path[0] = '\0';
     } else {
-        fprintf(stderr, "ERROR: Could not parse WebSocket url: %s\n", url.c_str());
+        logger.show("ERROR: Could not parse WebSocket url: " + url + "\n", Verbose::VERBOSITY_NORMAL);
         exit(1);
         return -1;
     }
@@ -528,7 +542,7 @@ int WebSocket::from_url(const std::string &url, bool useMask, const std::string 
     socket_t sockfd = hostname_connect(host, port);
 
     if (sockfd == INVALID_SOCKET) {
-        fprintf(stderr, "Unable to connect to %s:%d\n", host, port);
+        logger.show("ERROR: Unable to connect to " + std::string(host) + ":" + std::to_string(port) + "\n", Verbose::VERBOSITY_NORMAL);
         return -1;
     }
 
@@ -569,24 +583,24 @@ int WebSocket::from_url(const std::string &url, bool useMask, const std::string 
 
     for (i = 0; i < 2 || (i < 1023 && line[i - 2] != '\r' && line[i - 1] != '\n'); ++i) {
         if (recv(sockfd, line + i, 1, 0) == 0) {
-            fprintf(stderr, "ERROR: Connection closed unexpectedly\n");
+            logger.show("ERROR: Connection closed unexpectedly\n", Verbose::VERBOSITY_NORMAL);
             return -1;
         }
     }
     line[i] = 0;
     if (i == 1023) {
-        fprintf(stderr, "ERROR: Got invalid status line connecting to: %s\n", url.c_str());
+        logger.show("ERROR: Got invalid status line connecting to: " + url + "\n", Verbose::VERBOSITY_NORMAL);
         return -1;
     }
     if (sscanf(line, "HTTP/1.1 %d", &status) != 1 || status != 101) {
-        fprintf(stderr, "ERROR: Got bad status connecting to %s: %s", url.c_str(), line);
+        logger.show("ERROR: Got bad status connecting to: " + url + ": " + line + "\n", Verbose::VERBOSITY_NORMAL);
         return -1;
     }
     // TODO: verify response headers,
     while (true) {
         for (i = 0; i < 2 || (i < 1023 && line[i - 2] != '\r' && line[i - 1] != '\n'); ++i) {
             if (recv(sockfd, line + i, 1, 0) == 0) {
-                fprintf(stderr, "ERROR: Connection closed unexpectedly\n");
+                logger.show("ERROR: Connection closed unexpectedly\n", Verbose::VERBOSITY_NORMAL);
                 return -1;
             }
         }

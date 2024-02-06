@@ -9,11 +9,48 @@
 // wget https://raw.github.com/dhbaird/easywsclient/master/easywsclient.cpp
 
 #include <functional>
+#include <iostream>
+#include <ostream>
 #include <string>
 #include <thread>
 #include <vector>
 
 typedef int socket_t;
+
+class Verbose {
+  public:
+    enum eLevel { VERBOSITY_QUIET = 0, VERBOSITY_NORMAL = 1, VERBOSITY_VERBOSE = 2, VERBOSITY_VERY_VERBOSE = 3, VERBOSITY_DEBUG = 4 };
+
+    eLevel th;
+
+  public:
+    std::string ToString(eLevel lev) {
+        switch (lev) {
+            case VERBOSITY_QUIET:
+                return std::string("QUIET");
+            case VERBOSITY_NORMAL:
+                return std::string("NORMAL");
+            case VERBOSITY_VERBOSE:
+                return std::string("VERBOSE");
+            case VERBOSITY_VERY_VERBOSE:
+                return std::string("VERY_VERBOSE");
+            case VERBOSITY_DEBUG:
+                return std::string("DEBUG");
+            default:
+                return std::string("UNKNOWN");
+        }
+    }
+
+    void show(std::string str, eLevel lev) {
+        if (lev <= th) {
+            std::cout << std::string("[") << ToString(lev) << std::string("]") << std::string(" - ") << str << std::endl;
+        }
+    }
+
+    void SetTh(eLevel _th) {
+        th = _th;
+    }
+};
 
 struct Callback_Imp {
     virtual void operator()(const std::string &message) = 0;
@@ -30,7 +67,7 @@ struct wsheader_type {
         TEXT_FRAME = 0x1,
         BINARY_FRAME = 0x2,
         CLOSE = 8,
-        PING = 9,
+        PING = 0x09,
         PONG = 0xa,
     } opcode;
     int N0;
@@ -82,6 +119,8 @@ class WebSocket {
     // Loop receive thread
     std::thread loopThread;
 
+    Verbose logger;
+
     // Constructor
     WebSocket();
     ~WebSocket();
@@ -99,7 +138,7 @@ class WebSocket {
     template <class Iterator> void sendData(wsheader_type::opcode_type type, uint64_t message_size, Iterator message_begin, Iterator message_end);
     void close();
     void terminateConnection();
-    void begin();
+    void begin(bool unblocked = false);
     readyStateValues getReadyState();
 
     // Setters
